@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta http-equiv="X-UA-Compatible" content="IE=edge" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>碰撞检测</title>
+	</head>
+	<style>
+		html,
+		body {
+			padding: 0;
+			margin: 0;
+		}
+	</style>
+	<script type="importmap">
+		{
+			"imports": {
+				"three": "../lib/core/three.module.js"
+			}
+		}
+	</script>
+	<body></body>
+	<script type="module">
+		import * as THREE from "three";
+		import Detector from "../lib/jsm/utils/Detector.js";
+
+		import {
+			global,
+			setScene,
+			setCamera,
+			setRenderer,
+			setLight,
+			setStats,
+			setHelper,
+			keyboardStateMachine,
+		} from "./config/crash_detect.js";
+
+		window.onload = () => {
+			//判断浏览器是否兼容 webGL
+			if (!Detector.webgl) {
+				Detector.addGetWebGLMessage();
+			}
+			init();
+		};
+
+		//初始化整体加载
+		function init() {
+			setScene();
+			setCamera();
+			setLight();
+			setRenderer();
+			setStats();
+			setHelper();
+			// 初始化场景完成
+			keyboardStateMachine();
+			genFloor();
+			genCube();
+			genObstacle();
+			global.cube.rotation.y = 0.3;
+
+			render();
+		}
+
+		//设置动画
+		function render() {
+			global.renderer.render(global.scene, global.camera);
+			global.stats.update();
+			moveCube();
+			requestAnimationFrame(render);
+		}
+
+		//生成一个地板
+		function genFloor() {
+			const floorGeometry = new THREE.PlaneGeometry(100, 1000);
+			const floorMaterial = new THREE.MeshBasicMaterial({
+				color: 0x333333,
+				side: THREE.DoubleSide,
+			});
+			const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+			floor.position.y = -0.01;
+			floor.rotation.x = Math.PI / 2;
+			global.scene.add(floor);
+		}
+
+		//生成一个 cube
+		function genCube() {
+			const cubeGeometry = new THREE.BoxGeometry(10, 10, 10, 4, 4, 4);
+			const cubeMaterial = new THREE.MeshBasicMaterial({
+				color: 0xfff000,
+				wireframe: true, //以框架显示
+			});
+			global.cube = new THREE.Mesh(cubeGeometry, cubeMaterial);
+			global.cube.position.set(0, 5, 0); // y 为高的一半，让全部 cube 显示在平面上
+			global.scene.add(global.cube);
+		}
+
+		//生成障碍物
+		function genObstacle() {
+			const obstacleGeometry = new THREE.BoxGeometry(5, 15, 25, 1, 1, 1);
+			const obstacleMaterial = new THREE.MeshBasicMaterial({
+				color: 0xffffff,
+				wireframe: true,
+			});
+			global.obstacle = new THREE.Mesh(
+				obstacleGeometry,
+				obstacleMaterial
+			);
+			global.obstacle.position.set(15, 8, 0);
+			global.scene.add(global.obstacle);
+		}
+
+		function moveCube() {
+			// 每一帧的时间 0.016700000017881394 约等于 0.0167s
+			// 不同显示器的帧率不一样，每一帧的时长不一样，可以固定每秒移动距离，然后除以每帧的时长
+			let delta = global.Clock.getDelta();
+			const preSecMove = 5;
+			let steep = preSecMove / (1000 * delta);
+
+			if (global.keyState["w"] && !detectCrash()) {
+				global.cube.position.z += -steep;
+			}
+
+			if (global.keyState["a"] && !detectCrash()) {
+				global.cube.position.x += -steep;
+			}
+			if (global.keyState["s"] && !detectCrash()) {
+				global.cube.position.z += steep;
+			}
+			if (global.keyState["d"] && !detectCrash()) {
+				global.cube.position.x += steep;
+			}
+		}
+
+		/**
+		 * 创建检测方法
+		 * 1，获取移动物体的中心点坐标
+		 * 2，获取移动物体的所有顶点坐标
+		 * 3，变换所有顶点坐标变换矩阵
+		 *
+		 *  Raycaster 参数
+		 *  origin — 光线投射的原点向量。
+		 *  direction — 射线的方向向量，应该归一化。
+		 * 	near — 所有返回的结果应该比 near 远。near不能为负，默认值为0。
+		 *  far — 所有返回的结果应该比 far 近。far 不能小于 near，默认值为无穷大。
+		 *	Raycaster(origin, direction, near, far)
+		 */
+		function detectCrash() {
+			let isCrash = false;
+			//做一个备份
+			const cubeCenterPos = global.cube.position.clone();
+			const cubeVertices = getMoveVertices(cubeCenterPos);
+
+			for (let i = 0; i < cubeVertices.length; i++) {
+				//移动顶点转换后的坐标
+				const cubeVerticesPos = cubeVertices[i];
+
+				//变换后的顶点坐标和顶点原始坐标求向量
+				//通过.sub()方法可以对两个向量进行减法运算，比如两个表示顶点坐标的Vector3对象进行减法运算返回一个新的Vector3对象就是两个点构成的向量。
+				const directionVector = cubeVerticesPos
+					.clone()
+					.sub(cubeCenterPos);
+
+				// .normalize() 将该向量转换为单位向量
+				// 发射光线 cubeCenterPos 为投射的原点向量  directionVector 向射线提供方向的方向向量
+				const ray = new THREE.Raycaster(
+					cubeCenterPos,
+					directionVector.clone().normalize()
+				);
+
+				// 放入需要检测的物体，判断是否相交
+				const obstacleList = [global.obstacle];
+				const intersects = ray.intersectObjects(obstacleList);
+
+				if (
+					intersects.length > 0 &&
+					intersects[0].distance <= directionVector.length()
+				) {
+					isCrash = true;
+					break;
+				}
+			}
+			return isCrash;
+		}
+
+		//获取 cube 的法线坐标
+		function getCubeNormalVertices() {
+			const vertices = [];
+			//法线的原始数据
+			const normal = global.cube.geometry.attributes.normal.array;
+			for (let i = 0; i < normal.length; i += 3) {
+				vertices.push(
+					new THREE.Vector3(normal[i], normal[i + 1], normal[i + 2])
+				);
+			}
+			return vertices;
+		}
+
+		//获取 cube 的顶点坐标 vertex
+		function getCubeVertices() {
+			const vertices = [];
+			//顶点的原始数据
+			const position = global.cube.geometry.attributes.position.array;
+			for (let i = 0; i < position.length; i += 3) {
+				vertices.push(
+					new THREE.Vector3(
+						position[i],
+						position[i + 1],
+						position[i + 2]
+					)
+				);
+			}
+			return vertices;
+		}
+
+		//活动移动方向需要发射射线的顶点位置坐标
+		function getMoveVertices(cubeCenterPos) {
+			const cubeVertices = getCubeVertices(); //获取所有的顶点坐标
+			const cubeNormalVertices = getCubeNormalVertices(); //获取所有的顶点坐标
+			const cubeMoveVertices = [];
+
+			//根据法线向量的朝向判断当前的顶点是否参与计算
+			cubeNormalVertices.forEach((normal, index) => {
+				if (
+					(global.keyState["w"] && normal.z === -1) ||
+					(global.keyState["s"] && normal.z === 1) ||
+					(global.keyState["a"] && normal.x === -1) ||
+					(global.keyState["d"] && normal.x === 1)
+				) {
+					cubeMoveVertices.push(
+						cubeVertices[index]
+							.clone()
+							.applyMatrix4(global.cube.matrix)
+					);
+				}
+			});
+			return cubeMoveVertices;
+		}
+	</script>
+</html>
